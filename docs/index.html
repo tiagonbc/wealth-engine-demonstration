@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <meta name="theme-color" content="#006ac3">
+  <title>Wealth Engine Demonstration</title>
+  <meta name="description" content="A working prototype of the computational core of a digital wealth platform: portfolio optimization, Monte Carlo goal planning, financial health scores, rebalancing with pre-trade checks and a tested REST API. Preliminary version on mock data by Tiago Costa; not affiliated with RBC.">
+  <meta property="og:title" content="Wealth Engine: a working prototype by Tiago Costa">
+  <meta property="og:description" content="Portfolio optimization, Monte Carlo goal planning, financial health scores, rebalancing with pre-trade checks and a tested Python API. Preliminary version on mock data; not affiliated with RBC.">
+  <meta property="og:type" content="website">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23006ac3'/%3E%3Cpath d='M6 24 L12 14 L17 19 L26 8' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Crect x='0' y='29' width='32' height='3' fill='%23fedf01'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/styles.css?v=5">
+</head>
+<body>
+  <a class="skip" href="#app">Skip to content</a>
+  <div class="topline" aria-hidden="true"></div>
+  <div class="notice" role="note">
+    <div class="wrap">
+      <strong>Preliminary version · mock data.</strong>
+      <span>Independent work by Tiago Costa for his application to RBC&#8217;s Senior Software Quantitative Engineer role. Not affiliated with or endorsed by RBC.</span>
+    </div>
+  </div>
+  <header class="site">
+    <div class="wrap">
+      <a class="brand" href="#/">
+        <b>Wealth <i>Engine</i></b>
+        <span>A working prototype · Tiago Costa</span>
+      </a>
+      <button class="menu-btn" type="button" aria-expanded="false" aria-controls="nav">Menu</button>
+      <nav class="main" id="nav" aria-label="Main">
+        <a href="#/">Overview</a>
+        <a href="#/clients">Client plans</a>
+        <a href="#/portfolios">Portfolios</a>
+        <a href="#/trading">Trading</a>
+        <a href="#/validation">Validation</a>
+        <a href="#/api">API</a>
+        <a href="#/design">Design</a>
+        <a href="#/phase-in">Phase-in plan</a>
+        <a href="#/about">About</a>
+      </nav>
+    </div>
+  </header>
+  <div id="app" tabindex="-1"><div class="loading">Loading the engine output&#8230;</div></div>
+  <footer class="site">
+    <div class="wrap">
+      <span>Wealth Engine Demonstration · preliminary version · every figure is produced by the engine running on mock data. Not investment advice.</span>
+      <span>Independent work by Tiago Costa · <a href="https://www.linkedin.com/in/tiagonbc">linkedin.com/in/tiagonbc</a>. Colours follow RBC&#8217;s public website; no RBC logo, product or data is used, and RBC has not reviewed or endorsed this site.</span>
+      <span id="build-line"></span>
+    </div>
+  </footer>
+  <div class="tip" id="tip" role="tooltip"></div>
+  <script type="module" src="assets/app.js?v=5"></script>
+</body>
+</html>
