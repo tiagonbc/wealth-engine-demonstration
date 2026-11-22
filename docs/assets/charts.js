@@ -261,6 +261,97 @@ export function reliabilityChart(o) {
 }
 
 // ---------- tooltips ----------
+// ---------- distributions ----------
+function erf(x) {
+  const s = Math.sign(x); x = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * x);
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return s * y;
+}
+export const normCdf = (x, m, s) => 0.5 * (1 + erf((x - m) / (s * Math.SQRT2)));
+const normPdf = (x, m, s) => Math.exp(-0.5 * ((x - m) / s) ** 2) / (s * Math.sqrt(2 * Math.PI));
+
+/** Histogram as a density, with an optional normal curve and a comparison outline.
+ *  o.primary / o.compare: {name, edges, counts, n, mean, sd, color}. */
+export function histogramChart(o) {
+  const W = o.w || WIDTH, h = o.height || 340, pad = { l: 24, r: 16, t: 40, b: 46 };
+  const P = o.primary, C = o.compare;
+  const dens = (S) => S.counts.map((c, i) => c / (S.n * (S.edges[i + 1] - S.edges[i])));
+  const pd = dens(P), cd = C ? dens(C) : [];
+  const xs = [...P.edges, ...(C ? C.edges : [])];
+  let x0 = Math.min(...xs), x1 = Math.max(...xs);
+  if (o.clip) { x0 = Math.max(x0, o.clip[0]); x1 = Math.min(x1, o.clip[1]); }
+  const curve = [];
+  if (o.normal) for (let i = 0; i <= 220; i++) { const xv = x0 + (x1 - x0) * i / 220; curve.push([xv, normPdf(xv, P.mean, P.sd)]); }
+  let yMax = Math.max(...pd, ...cd, ...curve.map((c) => c[1])) * 1.06;
+  const floor = yMax * 2e-4;
+  const ty = o.logY ? (v) => Math.log10(Math.max(v, floor)) : (v) => v;
+  const y0v = ty(o.logY ? floor : 0), y1v = ty(yMax);
+  const x = lin(x0, x1, pad.l, W - pad.r), y = lin(y0v, y1v, h - pad.b, pad.t);
+  let s = "";
+  const ticks = niceTicks(x0, x1, 7).filter((t) => t >= x0 && t <= x1);
+  for (const t of ticks) {
+    s += `<line x1="${x(t)}" x2="${x(t)}" y1="${pad.t}" y2="${h - pad.b}" stroke="var(--grid)"/>`;
+    s += `<text x="${x(t)}" y="${h - pad.b + 18}" text-anchor="middle" class="num">${esc(o.fmtX(t))}</text>`;
+  }
+  s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${h - pad.b}" y2="${h - pad.b}" stroke="var(--axis)"/>`;
+  s += `<text x="${(pad.l + W - pad.r) / 2}" y="${h - 6}" text-anchor="middle">${esc(o.xLabel || "")}</text>`;
+  s += `<text x="${pad.l}" y="14">${o.logY ? "Relative frequency (log scale)" : "Relative frequency"}</text>`;
+  P.counts.forEach((c, i) => {
+    const a = P.edges[i], b = P.edges[i + 1];
+    if (b < x0 || a > x1) return;
+    const xa = x(Math.max(a, x0)), xb = x(Math.min(b, x1));
+    const top = y(ty(pd[i])), base = h - pad.b;
+    const share = c / P.n;
+    const expShare = normCdf(b, P.mean, P.sd) - normCdf(a, P.mean, P.sd);
+    const tip = `<b>${esc(o.fmtTip(a))} to ${esc(o.fmtTip(b))}</b><br>${c.toLocaleString("en-CA")} ${esc(o.unitWord || "observations")} (${(share * 100).toFixed(share < 0.001 ? 3 : 2)}%)<br>A normal curve would put ${(expShare * 100).toFixed(expShare < 0.001 ? 3 : 2)}% here`;
+    if (c > 0) s += `<rect x="${xa + 0.5}" y="${top}" width="${Math.max(xb - xa - 1, 0.6)}" height="${Math.max(base - top, 0)}" fill="${P.color}" opacity="0.8" data-tip="${esc(tip)}"/>`;
+    else s += `<rect x="${xa}" y="${pad.t}" width="${Math.max(xb - xa, 0.6)}" height="${base - pad.t}" fill="transparent" data-tip="${esc(tip)}"/>`;
+  });
+  if (C) {
+    let pts = [];
+    C.counts.forEach((c, i) => {
+      const a = Math.max(C.edges[i], x0), b = Math.min(C.edges[i + 1], x1);
+      if (b <= a) return;
+      const yy = y(ty(cd[i]));
+      pts.push(`${x(a)},${yy}`, `${x(b)},${yy}`);
+    });
+    s += `<polyline points="${pts.join(" ")}" fill="none" stroke="${C.color}" stroke-width="2" stroke-linejoin="round"/>`;
+  }
+  if (o.normal) s += `<polyline points="${curve.map(([xv, d]) => `${x(xv)},${y(ty(d))}`).join(" ")}" fill="none" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="5 4"/>`;
+  const mark = (v, label, right) => {
+    if (v < x0 || v > x1) return;
+    s += `<line x1="${x(v)}" x2="${x(v)}" y1="${pad.t - 14}" y2="${h - pad.b}" stroke="var(--ink-2)" stroke-width="1"/>`;
+    s += `<text x="${x(v) + (right ? 5 : -5)}" y="${pad.t - 6}" text-anchor="${right ? "start" : "end"}" class="ink2">${esc(label)}</text>`;
+  };
+  // put the larger of mean and median on the right so the two labels never collide
+  mark(P.mean, "mean", P.mean >= P.median);
+  mark(P.median, "median", P.median > P.mean);
+  const items = [{ name: P.name, color: P.color, kind: "box" }];
+  if (C) items.push({ name: C.name, color: C.color });
+  if (o.normal) items.push({ name: "Normal curve with the same mean and stdev", color: "var(--ink)" });
+  return `${legend(items)}<div class="chart"><svg viewBox="0 0 ${W} ${h}" role="img" aria-label="Distribution histogram">${s}</svg></div>`;
+}
+
+/** Normal Q-Q plot: sample quantiles against the quantiles of a fitted normal. */
+export function qqChart(o) {
+  const W = o.w || WIDTH, h = o.height || 300, pad = { l: 64, r: 16, t: 18, b: 46 };
+  const all = o.series.flatMap((s) => [...s.normal, ...s.empirical]);
+  const ticks = coverTicks(Math.min(...all), Math.max(...all), 5);
+  const lo = ticks[0], hi = ticks[ticks.length - 1];
+  const x = lin(lo, hi, pad.l, W - pad.r), y = lin(lo, hi, h - pad.b, pad.t);
+  let s = frame({ W, x, y, xTicks: ticks, yTicks: ticks, xFmt: o.fmt, yFmt: o.fmt, h, pad, xLabel: "What a normal distribution predicts", yLabel: "What the data show" });
+  s += `<line x1="${x(lo)}" y1="${y(lo)}" x2="${x(hi)}" y2="${y(hi)}" stroke="var(--ink-3)" stroke-width="1"/>`;
+  for (const se of o.series) {
+    se.p.forEach((p, i) => {
+      s += `<circle cx="${x(se.normal[i])}" cy="${y(se.empirical[i])}" r="3.2" fill="${se.color}" stroke="var(--surface)" stroke-width="1.5"
+        data-tip="${esc(`<b>${se.name}</b><br>${(p * 100).toFixed(1)}th percentile<br>Data: ${o.fmt(se.empirical[i])}<br>Normal: ${o.fmt(se.normal[i])}`)}"/>`;
+    });
+  }
+  return `${legend([...o.series.map((se) => ({ name: se.name, color: se.color, kind: "dot" })), { name: "On this line = normal", color: "var(--ink-3)" }])}
+    <div class="chart"><svg viewBox="0 0 ${W} ${h}" role="img" aria-label="Normal Q-Q plot">${s}</svg></div>`;
+}
+
 /** Small fan chart with no axes, for previews: outer band, inner band, median line. */
 export function miniFan(o) {
   const w = 320, h = o.height || 120, pad = 6;

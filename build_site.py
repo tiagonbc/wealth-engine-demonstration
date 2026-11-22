@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from api.app import create_app
-from wealth_engine import __version__, backtest, data, health, optimize, rebalance, risk, simulate, validation
+from wealth_engine import __version__, backtest, data, health, market, optimize, rebalance, risk, simulate, stats, validation
 from wealth_engine.metrics import portfolio_stats, risk_contributions
 
 ROOT = Path(__file__).resolve().parent
@@ -112,6 +112,50 @@ def api_samples_and_latency(accounts):
     return samples, latency
 
 
+def distributions(Wn: dict, terminal_wealth: dict, n_hist: int = 500, years: int = 25) -> dict:
+    """Every series the Statistics page can show, each with stats per frequency."""
+    series = []
+    spy = market.spy_returns()
+    if spy is not None:
+        series.append({
+            "id": "spy", "name": "SPY (S&P 500 ETF), total return", "group": "Market data (real)", "unit": "return",
+            "source": "Norgate Data, dividends reinvested, %s to %s" % (spy["start"], spy["end"]),
+            "freqs": {
+                "daily": {**stats.describe(spy["daily"], periods_per_year=252, bins=80), "span": "%s to %s" % (spy["start"], spy["end"])},
+                "monthly": {**stats.describe(spy["monthly"], periods_per_year=12, bins=40), "span": spy["monthly_span"]},
+                "annual": {**stats.describe(spy["annual"], periods_per_year=1, bins=12), "span": spy["annual_span"]},
+            },
+        })
+    rets = backtest.simulate_monthly(n_hist, years * 12, seed=777)
+    fee_m = (1 + data.PLATFORM_FEE) ** (1 / 12) - 1
+    for p in data.RISK_PROFILES:
+        m = rets @ Wn[p["id"]] - fee_m                       # (hist, months)
+        a = np.prod(1 + m.reshape(n_hist, years, 12), axis=2) - 1
+        series.append({
+            "id": "mp_" + p["id"], "name": p["name"] + " model portfolio", "group": "Model portfolios (simulated)",
+            "unit": "return", "source": "%d simulated %d-year histories from the mock assumptions, after fees" % (n_hist, years),
+            "freqs": {
+                "monthly": {**stats.describe(m.ravel(), periods_per_year=12, bins=40, time_series=False), "span": "pooled simulated months"},
+                "annual": {**stats.describe(a.ravel(), periods_per_year=1, bins=30, time_series=False), "span": "pooled simulated years"},
+            },
+        })
+    for i, (code, name, *_rest) in enumerate(data.ASSET_CLASSES):
+        series.append({
+            "id": "ac_" + code, "name": name, "group": "Asset classes (simulated)", "unit": "return",
+            "source": "%d simulated %d-year histories from the mock assumptions" % (n_hist, years),
+            "freqs": {"monthly": {**stats.describe(rets[:, :, i].ravel(), periods_per_year=12, bins=40, time_series=False),
+                                  "span": "pooled simulated months"}},
+        })
+    for h in data.HOUSEHOLDS:
+        series.append({
+            "id": "tw_" + h["id"], "name": "%s: wealth at %d" % (h["name"], h["plan_to_age"]), "group": "Client outcomes (Monte Carlo)",
+            "unit": "money", "source": "Monte Carlo paths in today's dollars; 0 means the money ran out",
+            "freqs": {"outcome": {**stats.describe(terminal_wealth[h["id"]], kind="money", bins=40, time_series=False, hist_upper_pct=99),
+                                  "span": "%s simulated paths" % format(len(terminal_wealth[h["id"]]), ",")}},
+        })
+    return {"normal_beyond_3sd": stats.NORMAL_BEYOND_3SD, "series": series}
+
+
 def main(fast: bool = False):
     t0 = time.perf_counter()
     paths = 4000 if fast else 10000
@@ -134,6 +178,7 @@ def main(fast: bool = False):
 
     # --- households
     households = []
+    terminal_wealth = {}
     grid_profiles = {k: Wn[k] for k in ("conservative", "moderately_conservative", "balanced", "growth")}
     for h in data.HOUSEHOLDS:
         plan = simulate.Plan.from_household(h)
@@ -142,6 +187,7 @@ def main(fast: bool = False):
         hs = health.score_household(h, res["probability_of_success"])
         households.append({"profile": h, "investable_total": data.total_investable(h), "plan": res,
                            "what_if": grid, "health": hs})
+        terminal_wealth[h["id"]] = simulate.project(plan, real)[0][:, -1]
 
     # --- accounts
     accounts = data.build_accounts(W)
@@ -153,6 +199,8 @@ def main(fast: bool = False):
     conv = validation.convergence(h3, Wn["balanced"], n_seeds=6 if fast else 12)
     calib = validation.calibration(W, n_plans=400 if fast else 1500, n_paths=400 if fast else 1000)
     stress = validation.stress_tests(h3, Wn["balanced"], n_paths=paths)
+
+    dists = distributions(Wn, terminal_wealth, n_hist=150 if fast else 500)
 
     samples, latency = api_samples_and_latency(accounts)
     tests = run_tests()
@@ -182,6 +230,7 @@ def main(fast: bool = False):
         "sensitivity": sensitivity,
         "probability_below_start": below_start,
         "risk_metrics": risk_rows,
+        "distributions": dists,
         "households": households,
         "rebalances": rebalances,
         "rebalance_policy": {"band_abs": rebalance.BAND_ABS, "band_rel": rebalance.BAND_REL,

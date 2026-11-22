@@ -1,4 +1,4 @@
-import { esc, lineChart, frontierChart, stackedBars, driftChart, rangeChart, barChart, reliabilityChart, miniFan, bindTooltips } from "./charts.js?v=5";
+import { esc, lineChart, frontierChart, stackedBars, driftChart, rangeChart, barChart, reliabilityChart, miniFan, histogramChart, qqChart, bindTooltips } from "./charts.js?v=8";
 
 const app = document.getElementById("app");
 let D = null;
@@ -131,7 +131,7 @@ function overview() {
         ${chipRow("Methods", ["Mean-variance optimization", "Monte Carlo simulation", "Risk parity", "Michaud resampling", "Tolerance-band rebalancing", "Calibration testing"])}
         ${chipRow("Metrics", ["Probability of success", "Sharpe", "Sortino", "VaR / CVaR 95%", "Max drawdown", "Calmar", "Tracking error", "Turnover", "Brier score"])}
         ${chipRow("Standards", ["OpenAPI 3.1", "RFC 9457 errors", "OSFI Guideline E-23 inventory fields"])}
-        <p class="note" style="margin-top:4px">Everything is mock: illustrative market assumptions and fictional clients. Nothing here is advice. Built with an AI coding agent working under tests; the design, checks and review are mine.</p>
+        <p class="note" style="margin-top:4px">Clients, accounts and market assumptions are mock; only the SPY statistics use real market data. Nothing here is advice. Built with an AI coding agent working under tests; the design, checks and review are mine.</p>
       </div>
     </section>
   </div></main>`;
@@ -546,7 +546,7 @@ function about() {
       <div class="panel"><h3>Tiago Costa</h3><p class="sub">Electrical engineer from Brazil, based in Waterloo, Ontario. Since 2017 I have built and run systematic strategies with my own capital: research and backtests in Python, machine-learning models with walk-forward validation, the order management system that trades them on Brazil&#8217;s B3 exchange, and a FastAPI and PostgreSQL application that reconciles every trade. Before that I traded a bilateral power contract portfolio at EDP and led the launch of EDP Solar. Level I Candidate in the CFA Program (May 2027 exam).</p>
         <p class="sub" style="margin-bottom:0"><a href="https://www.linkedin.com/in/tiagonbc">linkedin.com/in/tiagonbc</a></p></div>
       <div class="panel"><h3>Read this first</h3><ul class="small" style="margin:6px 0 0;padding-left:18px">
-        <li>This is a preliminary version. Every number comes from mock data: fictional households, accounts, funds and prices, and illustrative market assumptions.</li>
+        <li>This is a preliminary version. Every number comes from mock data (fictional households, accounts, funds and prices, and illustrative market assumptions), except the SPY statistics on the Statistics page, which use real total-return data from Norgate.</li>
         <li>It is independent work. RBC has not reviewed, endorsed or contributed to it, and it uses no RBC data, product, logo or methodology. The colours follow RBC&#8217;s public website.</li>
         <li>Health-score thresholds and rebalancing rules are common industry rules of thumb, chosen for the demonstration.</li>
         <li>Nothing here is financial advice.</li>
@@ -555,6 +555,151 @@ function about() {
     <div class="panel mt"><h3>Glossary</h3><p class="sub">The metrics and methods on these pages, in plain language.</p>
       <dl class="gloss">${GLOSSARY.map(([t, d]) => `<dt>${esc(t)}</dt><dd>${d}</dd>`).join("")}</dl></div>
   </div></main>`;
+}
+
+// ---------- statistics ----------
+const FREQ_LABEL = { daily: "Daily", monthly: "Monthly", annual: "Annual", outcome: "All paths" };
+const FREQ_WORD = { daily: "days", monthly: "months", annual: "years", outcome: "paths" };
+const statSeries = () => D.distributions.series;
+const findSeries = (id) => statSeries().find((s) => s.id === id);
+
+function fmtFor(unit, d) {
+  if (unit === "money") return { v: (x) => compact(x), axis: (x) => compact(x), tip: (x) => compact(x) };
+  const dec = d && d.stdev < 0.02 ? 2 : 1;
+  return { v: (x) => (x * 100).toFixed(2) + "%", axis: (x) => (x * 100).toFixed(dec === 2 ? 1 : 0) + "%", tip: (x) => (x * 100).toFixed(dec) + "%" };
+}
+
+function readings(d) {
+  const r = {};
+  const sk = d.skewness, ku = d.excess_kurtosis;
+  r.skewness = sk < -0.5 ? "Left-skewed: large losses are more common than gains of the same size" : sk > 0.5 ? "Right-skewed: a long tail of large values on the upside" : "Close to symmetric";
+  r.excess_kurtosis = ku > 3 ? "Very fat tails: extreme values far more often than a normal curve predicts" : ku > 1 ? "Fat tails: extreme values more often than normal" : ku < -0.5 ? "Thin tails: fewer extremes than normal" : "Tails close to normal";
+  const ratio = d.beyond_3sd / d.beyond_3sd_normal;
+  r.beyond_3sd = d.beyond_3sd === 0 ? "None in this sample" : `${ratio.toFixed(1)}× the normal rate of ${(d.beyond_3sd_normal * 100).toFixed(2)}%`;
+  r.jarque_bera_p = d.jarque_bera_p < 0.05 ? "Normality rejected at the 5% level" : "No evidence against normality at 5%";
+  if (d.autocorr1 != null) r.autocorr1 = Math.abs(d.autocorr1) < 0.05 ? "Little memory: one period says almost nothing about the next" : d.autocorr1 < 0 ? "Mild reversal from one period to the next" : "Mild momentum from one period to the next";
+  r.median = d.median > d.mean ? "Median above the mean: a few large losses pull the average down" : d.median < d.mean ? "Median below the mean: a few large values pull the average up" : "";
+  r.cvar95 = d.kind === "return" ? "Average loss in the worst 5% of periods" : "";
+  r.var95 = d.kind === "return" ? "Loss exceeded in only 5% of periods" : "";
+  return r;
+}
+
+function statsTable(sA, dA, sB, dB) {
+  const fA = fmtFor(sA.unit, dA), fB = sB ? fmtFor(sB.unit, dB) : null;
+  const R = readings(dA);
+  const isRet = dA.kind === "return";
+  const rows = [
+    ["Centre", null],
+    ["Observations", "n", (v) => num(v)],
+    ["Mean", "mean"], ["Median", "median"],
+    ...(isRet && dA.ann_mean != null ? [["Mean, annualized", "ann_mean"]] : []),
+    ["Spread", null],
+    ["Standard deviation", "stdev"], ["Interquartile range (25th to 75th)", "iqr"],
+    ...(isRet && dA.ann_vol != null ? [["Volatility, annualized", "ann_vol"]] : []),
+    ["Shape", null],
+    ["Skewness", "skewness", (v) => v.toFixed(2)],
+    ["Excess kurtosis", "excess_kurtosis", (v) => v.toFixed(2)],
+    ["Beyond 3 standard deviations", "beyond_3sd", (v) => (v * 100).toFixed(2) + "%"],
+    ["Tails", null],
+    ["Worst", "min"], ["1st percentile", "p1"], ["5th percentile", "p5"], ["95th percentile", "p95"], ["99th percentile", "p99"], ["Best", "max"],
+    ...(isRet ? [["Value at risk, 95%", "var95"], ["Conditional VaR, 95%", "cvar95"]] : []),
+    [isRet ? "Share of positive periods" : "Share of paths with money left", "share_positive", (v) => (v * 100).toFixed(1) + "%"],
+    ["Tests", null],
+    ["Jarque-Bera statistic", "jarque_bera", (v) => v >= 1e5 ? v.toExponential(2) : num(Math.round(v))],
+    ["Jarque-Bera p-value", "jarque_bera_p", (v) => v < 0.0001 ? "< 0.0001" : v.toFixed(4)],
+    ["Lag-1 autocorrelation", "autocorr1", (v) => (v == null ? "n/a (pooled)" : v.toFixed(3))],
+  ];
+  const cell = (d, f, key, fx) => { const v = d ? d[key] : undefined; return v === undefined ? "—" : (fx ? fx(v) : (v == null ? "n/a" : f.v(v))); };
+  const head = ["Statistic", { t: sA.name, r: true }, ...(sB ? [{ t: sB.name, r: true }] : []), "What it means"];
+  const body = rows.map(([label, key, fx]) => key === null
+    ? `<tr><td colspan="${sB ? 4 : 3}" style="background:var(--panel-alt);font-weight:500;color:var(--ink-2);font-size:12.5px;text-transform:uppercase;letter-spacing:.05em">${label}</td></tr>`
+    : tr([esc(label), R_(cell(dA, fA, key, fx)), ...(sB ? [R_(cell(dB, fB, key, fx))] : []), `<span class="small muted">${esc(R[key] || "")}</span>`]));
+  return table(head, body);
+}
+const R_ = (v) => ({ v, r: true });
+
+function statistics(q) {
+  const spy = findSeries("spy");
+  const groups = [...new Set(statSeries().map((s) => s.group))];
+  const options = (sel, allowNone) => (allowNone ? `<option value="">None</option>` : "") + groups.map((g) => `<optgroup label="${esc(g)}">${statSeries().filter((s) => s.group === g).map((s) => `<option value="${s.id}"${s.id === sel ? " selected" : ""}>${esc(s.name)}</option>`).join("")}</optgroup>`).join("");
+  const sid = q.get("s") || (spy ? "spy" : "mp_balanced");
+  const cid = q.has("c") ? q.get("c") : (spy ? "ac_USEQ" : "");
+  const short = spy ? inShort([
+    [`${(spy.freqs.daily.beyond_3sd / spy.freqs.daily.beyond_3sd_normal).toFixed(1)}×`, `as many SPY daily moves beyond 3 standard deviations as a normal curve predicts (${(spy.freqs.daily.beyond_3sd * 100).toFixed(2)}% of days, not 0.27%)`],
+    [spy.freqs.monthly.skewness.toFixed(2), "skewness of SPY monthly returns: losses come in larger steps than gains"],
+    [`${(spy.freqs.annual.median * 100).toFixed(1)}% vs ${(spy.freqs.annual.mean * 100).toFixed(1)}%`, "SPY median year against its mean year: the average is pulled down by a few bad years"],
+  ]) : "";
+  return `${pageHead("Statistics · distributions", "Return distributions", "Pick any series to see its whole distribution, not just its average: centre, spread, skewness, fat tails and a normality test, side by side with another series if you like.")}
+  <main><div class="wrap">
+    ${short}
+    <div class="panel">
+      <div class="st-controls">
+        <label>Series<select id="st-series">${options(sid, false)}</select></label>
+        <div><span class="st-lab">Frequency</span><div class="seg" id="st-freq" role="group" aria-label="Frequency"></div></div>
+        <label>Compare with<select id="st-compare">${options(cid, true)}</select></label>
+        <div class="st-toggles"><label class="chk"><input type="checkbox" id="st-normal" ${q.get("n") === "0" ? "" : "checked"}> Normal curve</label>
+          <label class="chk"><input type="checkbox" id="st-log" ${q.get("l") === "1" ? "checked" : ""}> Log scale</label></div>
+      </div>
+      <p class="small muted" id="st-source" style="margin:10px 0 0"></p>
+    </div>
+    <div class="panel mt"><h3 id="st-title">Distribution</h3><p class="sub" id="st-sub"></p><div id="st-chart"></div></div>
+    <div class="grid2 mt">
+      <div class="panel"><h3>Normal Q-Q plot</h3><p class="sub">Each dot is a percentile. On the line, the data behave like a normal distribution; dots bending away at the ends mean fatter tails than normal.</p><div id="st-qq"></div></div>
+      <div class="panel"><h3>What it means for the engine</h3><div id="st-insight" style="color:var(--ink-2);font-size:14.5px"></div></div>
+    </div>
+    <div class="panel mt"><h3>Statistics</h3><p class="sub">Every figure is computed from the full sample at build time.</p><div id="st-table"></div></div>
+    <p class="note">SPY statistics are derived from Norgate Data total-return prices; only summary statistics, histograms and quantiles are published here, not the price series. Simulated series come from the mock capital market assumptions. Not investment advice.</p>
+  </div></main>`;
+}
+
+function mountStatistics(q) {
+  const $ = (id) => document.getElementById(id);
+  const state = { s: $("st-series").value, f: q.get("f") || "", c: $("st-compare").value };
+  const draw = () => {
+    const sA = findSeries(state.s);
+    const freqs = Object.keys(sA.freqs);
+    if (!freqs.includes(state.f)) state.f = freqs.includes("monthly") ? "monthly" : freqs[0];
+    $("st-freq").innerHTML = freqs.map((f) => `<button type="button" class="seg-b" aria-pressed="${f === state.f}" data-f="${f}">${FREQ_LABEL[f]}</button>`).join("");
+    const dA = sA.freqs[state.f];
+    let sB = state.c ? findSeries(state.c) : null;
+    let dB = sB && sB.unit === sA.unit ? (sB.freqs[state.f] || null) : null;
+    const note = sB && !dB ? ` (${esc(sB.name)} has no ${FREQ_LABEL[state.f].toLowerCase()} data or different units, so it is not compared)` : "";
+    if (!dB) sB = null;
+    const f = fmtFor(sA.unit, dA);
+    $("st-source").innerHTML = `<b>Source:</b> ${esc(sA.source)}${dA.span && !sA.source.includes(dA.span) ? " · " + esc(dA.span) : ""}${sB ? ` &nbsp;|&nbsp; <b>Compared:</b> ${esc(sB.source)}` : ""}${note}`;
+    $("st-title").textContent = `${sA.name} · ${FREQ_LABEL[state.f].toLowerCase()}`;
+    const above = dA.hist.above ? ` The top 1% (${num(dA.hist.above)} paths above ${f.v(dA.hist.edges[dA.hist.edges.length - 1])}) is left off the chart so the rest stays readable; the statistics include it.` : "";
+    $("st-sub").innerHTML = `${num(dA.n)} ${FREQ_WORD[state.f]}. Bars show how often each range occurs; hover a bar to compare it with what a normal curve would expect.${$("st-log").checked ? " Log scale makes the rare extremes visible." : ""}${above}`;
+    const P = { name: sA.name, edges: dA.hist.edges, counts: dA.hist.counts, n: dA.n, mean: dA.mean, median: dA.median, sd: dA.stdev, color: "var(--s1)" };
+    const C = sB ? { name: sB.name, edges: dB.hist.edges, counts: dB.hist.counts, n: dB.n, color: "var(--s2)" } : null;
+    const clip = C ? [Math.min(dA.min, dB.p1), Math.max(dA.max, dB.p99)] : null;
+    $("st-chart").innerHTML = histogramChart({ primary: P, compare: C, clip, normal: $("st-normal").checked, logY: $("st-log").checked,
+      fmtX: f.axis, fmtTip: f.tip, unitWord: FREQ_WORD[state.f], xLabel: sA.unit === "money" ? "Wealth at the planning age, today's dollars" : "Return per period" });
+    $("st-table").innerHTML = statsTable(sA, dA, sB, dB);
+    $("st-qq").innerHTML = qqChart({ w: 520, height: 320, fmt: f.axis, series: [{ name: sA.name, color: "var(--s1)", ...dA.qq }, ...(sB ? [{ name: sB.name, color: "var(--s2)", ...dB.qq }] : [])] });
+    const insight = [];
+    if (sA.id === "spy" || (sB && sB.id === "spy")) {
+      const real = sA.id === "spy" ? dA : dB, model = sA.id === "spy" ? dB : dA;
+      if (model) insight.push(`Real SPY ${FREQ_WORD[state.f]} show skewness ${real.skewness.toFixed(2)} and excess kurtosis ${real.excess_kurtosis.toFixed(2)}; the simulated series shows ${model.skewness.toFixed(2)} and ${model.excess_kurtosis.toFixed(2)}. The engine&#8217;s lognormal returns are close to normal, so on their own they understate crashes.`);
+      else insight.push(`Real SPY ${FREQ_WORD[state.f]} show skewness ${real.skewness.toFixed(2)} and excess kurtosis ${real.excess_kurtosis.toFixed(2)}: not a normal distribution.`);
+      insight.push(`That is why the <a href="#/validation">Validation</a> page stress-tests fatter tails (Student t) and lower returns, and why the planner&#8217;s probabilities are checked for calibration rather than trusted.`);
+    } else if (sA.unit === "money") {
+      insight.push(`Wealth outcomes are strongly right-skewed (skewness ${dA.skewness.toFixed(2)}): a few very good markets produce large balances, so the median (${compact(dA.median)}) is the fairer &#8220;typical&#8221; outcome than the mean (${compact(dA.mean)}).`);
+      insight.push(`${(100 - dA.share_positive * 100).toFixed(1)}% of paths end with nothing left: that is the plan&#8217;s failure rate, and the reason the client plan reports a probability, not a single number.`);
+    } else {
+      insight.push(`Simulated returns are close to normal by construction (skewness ${dA.skewness.toFixed(2)}, excess kurtosis ${dA.excess_kurtosis.toFixed(2)}). Compare with SPY to see what real markets add.`);
+    }
+    if (dA.kind === "return" && dA.median > dA.mean) insight.push(`The median (${f.v(dA.median)}) sits above the mean (${f.v(dA.mean)}): a typical period is better than the average one, because the average carries the occasional large loss.`);
+    $("st-insight").innerHTML = insight.map((t) => `<p style="margin:0 0 8px">${t}</p>`).join("");
+    const qs = new URLSearchParams({ s: state.s, f: state.f, c: state.c || "", n: $("st-normal").checked ? "1" : "0", l: $("st-log").checked ? "1" : "0" });
+    history.replaceState(null, "", `#/statistics?${qs}`);
+  };
+  $("st-series").addEventListener("change", (e) => { state.s = e.target.value; draw(); });
+  $("st-compare").addEventListener("change", (e) => { state.c = e.target.value; draw(); });
+  $("st-normal").addEventListener("change", draw);
+  $("st-log").addEventListener("change", draw);
+  $("st-freq").addEventListener("click", (e) => { const b = e.target.closest("[data-f]"); if (b) { state.f = b.dataset.f; draw(); } });
+  draw();
 }
 
 // ---------- design ----------
@@ -643,9 +788,9 @@ function design() {
 }
 
 // ---------- router ----------
-const routes = { "": overview, clients, portfolios, trading, validation, api, design, "phase-in": phaseIn, about };
-const PAGES = [["", "Overview"], ["clients", "Client plans"], ["portfolios", "Portfolios"], ["trading", "Trading"], ["validation", "Validation"],
-  ["api", "API"], ["design", "Design"], ["phase-in", "Phase-in plan"], ["about", "About"]];
+const routes = { "": overview, clients, portfolios, statistics, trading, validation, api, design, "phase-in": phaseIn, about };
+const PAGES = [["", "Overview"], ["clients", "Client plans"], ["portfolios", "Portfolios"], ["statistics", "Statistics"], ["trading", "Trading"],
+  ["validation", "Validation"], ["api", "API"], ["design", "Design"], ["phase-in", "Phase-in plan"], ["about", "About"]];
 
 function render() {
   const raw = location.hash.replace(/^#\/?/, "");
@@ -658,6 +803,7 @@ function render() {
   const cut = html.lastIndexOf("</div></main>");
   if (cut > -1) html = html.slice(0, cut) + pn + html.slice(cut);
   app.innerHTML = html;
+  if (path === "statistics") mountStatistics(new URLSearchParams(query || ""));
   document.querySelectorAll("nav.main a").forEach((a) => {
     const target = a.getAttribute("href").replace(/^#\/?/, "");
     if (target === path || (!routes[path] && target === "")) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
